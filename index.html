@@ -1,0 +1,316 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Flow Trainer</title>
+
+<link rel="manifest" href="manifest.json">
+<meta name="theme-color" content="#000000">
+
+<style>
+body {
+  margin: 0;
+  background: black;
+  color: #4d4d4d;
+  font-family: -apple-system;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  height: 100vh;
+}
+
+/* Setup UI */
+#setup {
+  text-align: center;
+}
+
+input, select, button {
+  margin: 8px;
+  padding: 10px;
+  font-size: 16px;
+}
+
+/* Main display */
+#display {
+  font-size: 25vh;
+  display: none;
+}
+
+/* Stats */
+#stats {
+  position: absolute;
+  bottom: 10px;
+  font-size: 12px;
+}
+</style>
+</head>
+
+<body>
+
+<div id="setup">
+  <h2>Flow Setup</h2>
+
+  <input id="time" type="number" placeholder="Opening time (sec)" value="60"><br>
+  <input id="count" type="number" placeholder="Sequences" value="4"><br>
+
+  <label>
+    <input type="checkbox" id="random"> Randomise
+  </label><br>
+
+  <button onclick="startPreset('balanced')">Balanced</button>
+  <button onclick="startPreset('fast')">Fast</button>
+  <button onclick="startPreset('deep')">Deep</button><br>
+
+  <button onclick="startCustom()">Start Custom</button>
+  <button onclick="loadLast()">Load Last</button>
+</div>
+
+<div id="display"></div>
+<div id="stats"></div>
+
+<script>
+// Register service worker
+if ('serviceWorker' in navigator) {
+  navigator.serviceWorker.register('service-worker.js');
+}
+
+const display = document.getElementById("display");
+const setup = document.getElementById("setup");
+const statsEl = document.getElementById("stats");
+
+let config;
+let paused = false;
+let lastTap = 0;
+let pauseCount = 0;
+let startTime;
+let pulseTimer;
+let timer;
+
+// --------------------
+// START METHODS
+// --------------------
+function startPreset(type) {
+  if (type === "balanced") {
+    config = {
+      openingTime: 60,
+      sequences: [
+        {length:45,speed:"slow",depth:"shallow"},
+        {length:60,speed:"moderate",depth:"middle"},
+        {length:30,speed:"fast",depth:"shallow"},
+        {length:45,speed:"moderate",depth:"deep"}
+      ]
+    };
+  }
+
+  if (type === "fast") {
+    config = {
+      openingTime: 30,
+      sequences: [
+        {length:30,speed:"moderate",depth:"middle"},
+        {length:45,speed:"fast",depth:"deep"},
+        {length:30,speed:"fast",depth:"deep"}
+      ]
+    };
+  }
+
+  if (type === "deep") {
+    config = {
+      openingTime: 90,
+      sequences: [
+        {length:60,speed:"slow",depth:"deep"},
+        {length:90,speed:"moderate",depth:"deep"}
+      ]
+    };
+  }
+
+  launch();
+}
+
+function startCustom() {
+  const openingTime = parseInt(document.getElementById("time").value);
+  const count = parseInt(document.getElementById("count").value);
+  const random = document.getElementById("random").checked;
+
+  let sequences = [];
+
+  if (random) {
+    for (let i = 0; i < count; i++) {
+      sequences.push({
+        length: rand(20,120),
+        speed: pick(["slow","moderate","fast"]),
+        depth: pick(["shallow","middle","deep"])
+      });
+    }
+  } else {
+    for (let i = 0; i < count; i++) {
+      sequences.push({
+        length: 45,
+        speed: "moderate",
+        depth: "middle"
+      });
+    }
+  }
+
+  config = { openingTime, sequences };
+  launch();
+}
+
+function loadLast() {
+  const saved = localStorage.getItem("flowConfig");
+  if (saved) {
+    config = JSON.parse(saved);
+    launch();
+  }
+}
+
+// --------------------
+// LAUNCH
+// --------------------
+function launch() {
+  localStorage.setItem("flowConfig", JSON.stringify(config));
+
+  setup.style.display = "none";
+  display.style.display = "block";
+
+  pauseCount = 0;
+  startTime = Date.now();
+
+  startCountdown(config.openingTime);
+}
+
+// --------------------
+// HELPERS
+// --------------------
+function rand(min,max){
+  return Math.floor(Math.random()*(max-min+1))+min;
+}
+
+function pick(arr){
+  return arr[Math.floor(Math.random()*arr.length)];
+}
+
+const speedMap = {
+  slow: 1.7,
+  moderate: 0.9,
+  fast: 0.5
+};
+
+const depthMap = {
+  shallow: "s",
+  middle: "m",
+  deep: "d"
+};
+
+// --------------------
+// TAP CONTROL
+// --------------------
+document.addEventListener("click", () => {
+  const now = Date.now();
+
+  if (now - lastTap < 300) {
+    startCountdown(30);
+  } else {
+    paused = !paused;
+    if (paused) {
+      pauseCount++;
+      display.style.opacity = 0;
+    } else {
+      display.style.opacity = 1;
+    }
+  }
+
+  lastTap = now;
+});
+
+// --------------------
+// COUNTDOWN
+// --------------------
+function startCountdown(seconds) {
+  clearInterval(timer);
+
+  timer = setInterval(() => {
+    if (!paused) {
+      let m = Math.floor(seconds / 60);
+      let s = seconds % 60;
+
+      display.textContent = m + ":" + s.toString().padStart(2, "0");
+
+      seconds--;
+
+      if (seconds < 0) {
+        clearInterval(timer);
+        runSequences();
+      }
+    }
+  }, 1000);
+}
+
+// --------------------
+// PULSE
+// --------------------
+function pulse(letter) {
+  display.textContent = letter;
+  display.style.opacity = 1;
+
+  setTimeout(() => {
+    if (!paused) display.style.opacity = 0;
+  }, 200);
+}
+
+// --------------------
+// SEQUENCES
+// --------------------
+function runSequences() {
+  let i = 0;
+
+  function nextSequence() {
+    if (i >= config.sequences.length) {
+      endSession();
+      return;
+    }
+
+    const seq = config.sequences[i];
+    let elapsed = 0;
+
+    function loop() {
+      if (paused) {
+        pulseTimer = setTimeout(loop, 100);
+        return;
+      }
+
+      if (elapsed >= seq.length) {
+        i++;
+        nextSequence();
+        return;
+      }
+
+      pulse(depthMap[seq.depth]);
+
+      const interval = speedMap[seq.speed];
+      elapsed += interval;
+
+      pulseTimer = setTimeout(loop, interval * 1000);
+    }
+
+    loop();
+  }
+
+  nextSequence();
+}
+
+// --------------------
+// END
+// --------------------
+function endSession() {
+  display.style.opacity = 0;
+
+  const totalTime = Math.floor((Date.now() - startTime) / 1000);
+
+  statsEl.textContent =
+    `Time: ${totalTime}s | Pauses: ${pauseCount}`;
+}
+</script>
+
+</body>
+</html>
